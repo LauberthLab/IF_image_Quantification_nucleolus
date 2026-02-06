@@ -55,7 +55,13 @@ def _save_gray(img, path):
 def _save_label_tiff(lbl, path):
     skio.imsave(path, img_as_uint(lbl), check_contrast=False)
 
-
+# === Utility helpers ===
+def flatfield_correct(im, sigma_px=30):
+    """Divide by a heavy Gaussian blur to correct uneven illumination."""
+    bg = filters.gaussian(im.astype(np.float32), sigma=sigma_px, preserve_range=True)
+    bg = np.clip(bg, 1e-6, None)
+    corr = im.astype(np.float32) / bg
+    return exposure.rescale_intensity(corr, in_range='image', out_range=(0, 1))
 
 def main2(
     nd2_file,

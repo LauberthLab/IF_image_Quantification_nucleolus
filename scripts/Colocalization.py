@@ -34,34 +34,32 @@ def get_CoLoc(
     DAPI_IDX=0,
     NPM1_IDX=2,
     NC_IDX=3,
-    nucleolar_component="FBL",
-    output_dir="CoLoc_Results",
-    group_name=None,
-    bg_sigma=6.0,
-    bg_subtract=True,
-    min_object_area=40,
-    save_intermediates=True,
-    verbose=False,
+    DAPI_NAME="DAPI",
+    NPM1_NAME="NPM1",
+    nucleolar_component = None,
+    PIXEL_SIZE_UM=None,
+    output_dir="./",
+    group_name="",
+    # saving
+    save_png=True, save_tiff=True, save_numpy=False, save_figure=True, figure_dpi=600,
 ):
     """
     Reuse precomputed nuclei + NPM1 (nucleoli) labels from StarDist,
     segment FBL foci, and compute Manders M1/M2 between NPM1 and FBL.
     """
 
-    # ---------------- paths ----------------
     file_stem = os.path.splitext(os.path.basename(nd2_file))[0]
     prefix = f"{group_name}_" if group_name else ""
     out_root = _ensure_dir(os.path.join(output_dir, prefix + file_stem))
 
-    # load nd2 & channels
         
     rdr = nd2.ND2File(nd2_file)
     arr_raw = rdr.asarray()
 
-    # (C, Y, X)
-    if arr_raw.ndim == 5:      
+    # reshape to (C, Y, X) by max projecting Z/T if present
+    if arr_raw.ndim == 5:      # (T,Z,C,Y,X)
         T, Z, C, Y, X = arr_raw.shape
-        arr = arr_raw.max(axis=(0,1))      
+        arr = arr_raw.max(axis=(0,1))       # -> (C,Y,X)
         chan_count = C
         chan_names = []
         try:
@@ -111,7 +109,6 @@ def get_CoLoc(
     npm1 = arr[npm1_ch].astype(np.float32)
     nc  = arr[ncc_ch].astype(np.float32)
 
-    # load PRECOMPUTED labels
     nuclei_raw   = skio.imread(nuclei_labels_path)
     nucleoli_raw = skio.imread(npm1_labels_path)
 
@@ -129,18 +126,20 @@ def get_CoLoc(
     nucleoli = np.where(nuclei > 0, nucleoli, 0)
     nucleoli = measure.label(nucleoli > 0).astype(np.int32)
 
-    # If labels are binary masks, label them
-    if nuc_lab.max() <= 1:
-        nuc_lab = measure.label(nuc_lab > 0)
-    if npm1_lab.max() <= 1:
-        npm1_lab = measure.label(npm1_lab > 0)
+    # ensure background is 0 and labels are contiguous-ish
+    nuclei   = measure.label(nuclei > 0).astype(np.int32)
+    nucleoli = np.where(nuclei > 0, nucleoli, 0)
+    nucleoli = measure.label(nucleoli > 0).astype(np.int32)
 
-    # Optional cleanup
-    if min_object_area is not None and min_object_area > 0:
-        nuc_lab = morphology.remove_small_objects(nuc_lab, min_size=min_object_area)
-        npm1_lab = morphology.remove_small_objects(npm1_lab, min_size=min_object_area)
+    # ---------------- flatfield / basic images ----------------
+    dapi_ff = flatfield_correct(dapi, sigma_px=30)
+    npm1_ff = flatfield_correct(npm1, sigma_px=30)
+    nc_ff  = flatfield_correct(nc,  sigma_px=30)
 
-    #FBL or UBF segmentation (foci inside inner nucleus)
+    #inner nucleus mask (remove rims)
+    inner_nucleus_mask = morphology.erosion(nuclei > 0, morphology.disk(10))
+
+    #FBL segmentation (foci inside inner nucleus)
     nc_in   = nc_ff.copy(); nc_in[nuclei == 0] = 0
     nc_bg   = filters.gaussian(nc_in, sigma=6.0)
     nc_corr = np.clip(nc_in - nc_bg, 0, None)
@@ -165,7 +164,7 @@ def get_CoLoc(
         df_nc = pd.DataFrame(columns=["label","area","mean_intensity","eccentricity",
                                        "solidity","perimeter","parent_nucleus"])
 
-    #NPM1 mask for Manders (intensity-based)
+    # ---------------- NPM1 mask for Manders (intensity-based) ----------------
     npm1_in   = npm1_ff.copy(); npm1_in[nuclei == 0] = 0
     npm1_bg   = filters.gaussian(npm1_in, sigma=6.0)
     npm1_corr = np.clip(npm1_in - npm1_bg, 0, None)
@@ -177,7 +176,7 @@ def get_CoLoc(
 
     core_mask = inner_nucleus_mask
 
-    #Global Manders / Jaccard (NPM1 <-> NC)
+    # Global Manders / Jaccard
     # Jaccard on binary masks
     union = np.logical_or(npm1_mask, nc_mask)[core_mask].sum()
     inter = np.logical_and(npm1_mask, nc_mask)[core_mask].sum()
@@ -248,7 +247,6 @@ def get_CoLoc(
     df_manders = pd.DataFrame(per_nuc_rows)
     df_manders.to_csv(os.path.join(out_root, f"per_nucleus_manders_NPM1_{nucleolar_component}.csv"), index=False)
 
-    # per-cell / per-nucleolus quant (using existing labels)
     parent_map = parent_by_mode(nucleoli, nuclei)
 
     props_nucleoli = measure.regionprops_table(
@@ -288,7 +286,6 @@ def get_CoLoc(
     total_area_nuclei   = float(df_cells["area"].sum())  if len(df_cells)  else 1e-9
     ratio = total_area_nucleoli / total_area_nuclei
 
-    # saving images
     if save_png:
         _save_gray(dapi, os.path.join(out_root, "raw_DAPI.png"))
         _save_gray(npm1, os.path.join(out_root, "raw_NPM1.png"))
@@ -347,7 +344,7 @@ def get_CoLoc(
         fig.savefig(os.path.join(out_root, "summary_2x3.png"), dpi=figure_dpi, bbox_inches="tight")
         plt.close(fig)
 
-    #summary JSON
+    # summary JSON
     meta = {
         "file": nd2_file, "group": group_name,
         "channels": {

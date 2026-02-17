@@ -14,12 +14,20 @@ from stardist.models import StarDist2D
 
 
 # helpers 
-def normalize01(a):
-    a = a.astype(np.float32)
-    mn, mx = float(np.nanmin(a)), float(np.nanmax(a))
-    if mx <= mn:
-        return np.zeros_like(a, dtype=np.float32)
-    return (a - mn) / (mx - mn)
+# def normalize01(a):
+#     a = a.astype(np.float32)
+#     mn, mx = float(np.nanmin(a)), float(np.nanmax(a))
+#     if mx <= mn:
+#         return np.zeros_like(a, dtype=np.float32)
+#     return (a - mn) / (mx - mn)
+
+# percentile based normalization to handle outlier pixels
+def normalize01(x):
+    x = x.astype(np.float32)
+    lo, hi = np.percentile(x, (1, 99))
+    x = np.clip((x - lo) / (hi - lo + 1e-6), 0, 1)
+    return x
+    
 
 def parent_by_mode(child_labels, parent_labels):
     """Map child label -> parent label, based on mode of overlapping parent labels."""

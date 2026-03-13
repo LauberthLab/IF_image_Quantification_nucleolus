@@ -59,8 +59,8 @@ pip install tqdm  # for progress bars
 
 1. Clone this repository:
 ```bash
-git clone https://github.com/yourusername/nucleolar-analysis.git
-cd nucleolar-analysis
+git clone https://github.com/LauberthLab/IF_image_Quantification_nucleolus
+cd IF_image_Quantification_nucleolus
 ```
 
 2. Create the required directory structure:
